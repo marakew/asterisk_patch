@@ -1,0 +1,17 @@
+--- chan_zap.c.org	Mon Oct  9 16:29:51 2006
++++ chan_zap.c	Thu Oct 12 22:03:44 2006
+@@ -3637,6 +3637,14 @@
+ 			res = AST_BRIDGE_COMPLETE;
+ 			goto return_from_bridge;
+ 		}
++		if (f->frametype == AST_FRAME_VIDEO ||
++		    f->frametype == AST_FRAME_VOICE) {
++			if (who == c0) {
++				ast_write(c1, f);
++			} else if (who == c1) {
++				ast_write(c0, f);
++			}
++		}
+ 		if (f->frametype == AST_FRAME_DTMF) {
+ 			if ((who == c0) && p0->pulsedial) {
+ 				ast_write(c1, f);

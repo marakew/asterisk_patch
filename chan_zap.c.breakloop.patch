@@ -1,0 +1,10 @@
+--- chan_zap.c.org	Mon Oct  9 16:29:51 2006
++++ chan_zap.c	Thu Oct 12 22:03:44 2006
+@@ -4785,6 +4793,7 @@
+ 	/* If it's not us, return NULL immediately */
+ 	if (ast != p->owner) {
+ 		ast_log(LOG_WARNING, "We're %s, not %s\n", ast->name, p->owner->name);
++		zt_hangup(ast);
+ 		f = &p->subs[index].f;
+ 		return f;
+ 	}

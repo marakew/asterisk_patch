@@ -1,0 +1,72 @@
+--- rtp.h.orig	Fri Sep 22 11:22:03 2006
++++ rtp.h	Thu Oct 12 22:34:44 2006
+@@ -45,8 +45,10 @@
+ #define AST_RTP_CN              	(1 << 1)
+ /*! DTMF (Cisco Proprietary) */
+ #define AST_RTP_CISCO_DTMF      	(1 << 2)
++/*! NSE (Cisco Proprietary) */
++#define AST_RTP_CISCO_NSE		(1 << 3)
+ /*! Maximum RTP-specific code */
+-#define AST_RTP_MAX             	AST_RTP_CISCO_DTMF
++#define AST_RTP_MAX             	AST_RTP_CISCO_NSE
+ 
+ #define MAX_RTP_PT			256
+ 
+--- rtp.c.orig	Mon Oct  9 16:30:15 2006
++++ rtp.c	Thu Oct 12 22:32:18 2006
+@@ -677,6 +677,34 @@
+ 	return f;
+ }
+ 
++static struct ast_frame *process_cisco_nse(struct ast_rtp *rtp, unsigned char *data, int len)
++{
++	unsigned int event;
++	static struct ast_frame null_frame = { AST_FRAME_NULL, };
++
++	event = ntohl(*((unsigned int *)(data)));
++	event >>= 24;
++	event &= 0xff;
++
++	/* Print out debug if turned on */
++	if (rtpdebug || option_debug > 2)
++		ast_log(LOG_DEBUG, "Cisco NSE Event: %08x (len = %d)\n", event, len);
++
++	return &null_frame;
++
++	/*	event
++		32	Fax Mode, CED tone Detected (RFC2833)
++		34	Modem Mode, ANSam tone Detected (RFC2833)
++		192	Up-Speed, CED tone Detected
++		193	ECAN OFF, Phase Reversal Detected
++		194	ECAN ON, Silence Detected
++		200	T38 Fax Mode, V.21 Detected
++		201	T38 Fax Mode ACK
++		202	T38 Fax Mode NACK
++		203	Modem Relay Mode, CM Tone Detected
++	*/
++}
++
+ /*! 
+  * \brief Process RTP DTMF and events according to RFC 2833.
+  * 
+@@ -1263,6 +1291,12 @@
+ 				f = process_cisco_dtmf(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen);
+ 				rtp->lasteventseqn = seqno;
+ 			}
++		} else if (rtpPT.code == AST_RTP_CISCO_NSE) {
++			/* It's really special -- process it the Cisco way */
++			if (rtp->lasteventseqn <= seqno || (rtp->lasteventseqn >= 65530 && seqno <= 6)) {
++				f = process_cisco_nse(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen);
++				rtp->lasteventseqn = seqno;
++			}
+ 		} else if (rtpPT.code == AST_RTP_CN) {
+ 			/* Comfort Noise */
+ 			f = process_rfc3389(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen);
+@@ -1333,6 +1367,7 @@
+ 	{{1, AST_FORMAT_G726_AAL2}, "audio", "AAL2-G726-32"},
+ 	{{0, AST_RTP_DTMF}, "audio", "telephone-event"},
+ 	{{0, AST_RTP_CISCO_DTMF}, "audio", "cisco-telephone-event"},
++	{{0, AST_RTP_CISCO_NSE}, "audio", "cisco-nse-event"},
+ 	{{0, AST_RTP_CN}, "audio", "CN"},
+ 	{{1, AST_FORMAT_JPEG}, "video", "JPEG"},
+ 	{{1, AST_FORMAT_PNG}, "video", "PNG"},

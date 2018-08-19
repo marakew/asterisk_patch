@@ -1,0 +1,70 @@
+--- chan_mgcp.c.orig	Sun Oct 23 03:47:26 2005
++++ chan_mgcp.c.w	Sun Oct 23 23:07:33 2005
+@@ -2853,8 +2853,20 @@
+ 		   stop if now if appropriate */
+ 		if (ast_bridged_channel(p->sub->next->owner))
+ 			ast_moh_stop(ast_bridged_channel(p->sub->next->owner));
+-		if (p->sub->owner->_state == AST_STATE_RINGING) {
+-			ast_indicate(ast_bridged_channel(p->sub->next->owner), AST_CONTROL_RINGING);
++		if (p->sub->next->owner->_state == AST_STATE_RINGING) {
++			ast_indicate(ast_bridged_channel(p->sub->owner), AST_CONTROL_RINGING);
++		}
++		if (p->sub->owner->cdr){
++			/* Move CDR from second channel to current one */
++			p->sub->next->owner->cdr =
++				ast_cdr_append(p->sub->next->owner->cdr, p->sub->owner->cdr);
++			p->sub->owner->cdr = NULL;
++		}
++		if (ast_bridged_channel(p->sub->owner)->cdr){
++			/* Move CDR from second channel's bridge to current one */
++			p->sub->next->owner->cdr =
++				ast_cdr_append(p->sub->next->owner->cdr, ast_bridged_channel(p->sub->owner)->cdr);
++			ast_bridged_channel(p->sub->owner)->cdr = NULL;
+ 		}
+ 		if (ast_channel_masquerade(p->sub->next->owner, ast_bridged_channel(p->sub->owner))) {
+ 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
+@@ -2862,12 +2874,26 @@
+ 			return -1;
+ 		}
+ 		/* Orphan the channel */
++		/* Orphan the channel after releasing the lock */
++		ast_mutex_unlock(&p->sub->next->lock);
+ 		unalloc_sub(p->sub->next);
+ 	} else if (ast_bridged_channel(p->sub->next->owner)) {
+ 		if (p->sub->owner->_state == AST_STATE_RINGING) {
+ 			ast_indicate(ast_bridged_channel(p->sub->next->owner), AST_CONTROL_RINGING);
+ 		}
+ 		ast_moh_stop(ast_bridged_channel(p->sub->next->owner));
++		if (p->sub->next->owner->cdr) {
++			/* Move CDR from second channel to current one */
++			p->sub->owner->cdr =
++				ast_cdr_append(p->sub->owner->cdr, p->sub->next->owner->cdr);
++			p->sub->next->owner->cdr = NULL;
++		}
++		if (ast_bridged_channel(p->sub->next->owner)->cdr) {
++			/* Move CDR from second channel's bridge to current one */
++			p->sub->owner->cdr =
++				ast_cdr_append(p->sub->owner->cdr, ast_bridged_channel(p->sub->next->owner)->cdr);
++			ast_bridged_channel(p->sub->next->owner)->cdr = NULL;
++		}
+ 		if (ast_channel_masquerade(p->sub->owner, ast_bridged_channel(p->sub->next->owner))) {
+ 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
+ 				ast_bridged_channel(p->sub->next->owner)->name, p->sub->owner->name);
+@@ -2878,6 +2904,7 @@
+ 			ast_verbose(VERBOSE_PREFIX_3 "Swapping %d for %d on %s@%s\n", p->sub->id, p->sub->next->id, p->name, p->parent->name);
+ 		}
+ 		p->sub = p->sub->next;
++		ast_mutex_unlock(&p->sub->lock);
+ 		unalloc_sub(p->sub->next);
+ 		/* Tell the caller not to hangup */
+ 		return 1;
+@@ -3180,7 +3207,8 @@
+ 					}
+ 				} else if (res) {
+ 					ast_log(LOG_WARNING, "Transfer attempt failed\n");
+-					ast_mutex_unlock(&p->sub->next->lock);
++					if (p->sub->next->owner)
++						ast_mutex_unlock(&p->sub->next->lock);
+ 					return -1;
+ 				}
+ 				ast_mutex_unlock(&p->sub->next->lock);

@@ -1,0 +1,162 @@
+diff -urN channels.orig/Makefile channels/Makefile
+--- channels.orig/Makefile	2008-05-15 09:22:10.000000000 +0300
++++ channels/Makefile	2008-05-19 21:10:27.000000000 +0300
+@@ -89,7 +89,7 @@
+ else
+ chan_h323.so: chan_h323.o h323/libchanh323.a
+ 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
+-	$(CMD_PREFIX) $(CXX) $(PTHREAD_CFLAGS) $(ASTLDFLAGS) $(SOLINK) -o $@ $< h323/libchanh323.a $(CHANH323LIB) -L$(PWLIBDIR)/lib $(PTLIB) -L$(OPENH323DIR)/lib $(H323LIB) -L/usr/lib -lcrypto -lssl -lexpat
++	$(CMD_PREFIX) $(CXX) $(PTHREAD_CFLAGS) $(ASTLDFLAGS) $(SOLINK) -o $@ $< h323/libchanh323.a $(CHANH323LIB) -L$(OPENH323DIR)/lib $(H323LIB) -L$(PWLIBDIR)/lib $(PTLIB) -L/usr/lib -lcrypto -lssl -lexpat
+ endif
+ 
+ chan_misdn.o: ASTCFLAGS+=-Imisdn
+diff -urN channels.orig/h323/ast_h323.cxx channels/h323/ast_h323.cxx
+--- channels.orig/h323/ast_h323.cxx	2008-05-15 09:19:22.000000000 +0300
++++ channels/h323/ast_h323.cxx	2008-05-19 20:44:50.000000000 +0300
+@@ -1834,17 +1834,32 @@
+ 	return TRUE;
+ }
+ 
++#ifdef NEED_RTP_QOS_PARAM
+ H323Channel * MyH323Connection::CreateRealTimeLogicalChannel(const H323Capability & capability,
+ 									H323Channel::Directions dir,
+ 									unsigned sessionID,
+ 									const H245_H2250LogicalChannelParameters * /*param*/,
+ 									RTP_QOS * /*param*/ )
++#else
++H323Channel * MyH323Connection::CreateRealTimeLogicalChannel(const H323Capability & capability,
++									H323Channel::Directions dir,
++									unsigned sessionID,
++									const H245_H2250LogicalChannelParameters * /*param*/);
++#endif
+ {
+-	/* Do not open tx channel when transmitter has been paused by empty TCS */
+-	if ((dir == H323Channel::IsTransmitter) && transmitterSidePaused)
+-		return NULL;
++	PIPSocket::Address externIpAddr;
++	WORD externPort;
+ 
+-	return new MyH323_ExternalRTPChannel(*this, capability, dir, sessionID);
++	GetControlChannel().GetLocalAddress().GetIpAndPort(externIpAddr, externPort);
++
++	if (h323debug){
++		cout << "\t-- Create RealTime logical channel: " << endl;
++		cout << "\t\t-- SessionID: " << sessionID << endl;
++		cout << "\t\t-- ExternalIpAddress: " <<  externIpAddr << endl;
++		cout << "\t\t-- ExternalPort: " << externPort << endl;
++	}
++
++	return new MyH323_ExternalRTPChannel(*this, capability, dir, sessionID, externIpAddr, externPort);
+ }
+ 
+ /** This callback function is invoked once upon creation of each
+@@ -2114,8 +2129,10 @@
+ MyH323_ExternalRTPChannel::MyH323_ExternalRTPChannel(MyH323Connection & connection,
+ 							const H323Capability & capability,
+ 							Directions direction,
+-							unsigned id)
+-	: H323_ExternalRTPChannel::H323_ExternalRTPChannel(connection, capability, direction, id)
++							unsigned id,
++							const PIPSocket::Address & ip,
++							WORD dataPort)
++	: H323_ExternalRTPChannel::H323_ExternalRTPChannel(connection, capability, direction, id, ip, dataPort)
+ {
+ 	struct rtp_info *info;
+ 
+@@ -2125,7 +2142,7 @@
+ 		cout << "\tERROR: on_external_rtp_create failure" << endl;
+ 		return;
+ 	} else {
+-		localIpAddr = info->addr;
++		localIpAddr = ip;
+ 		localPort = info->port;
+ 		/* tell the H.323 stack */
+ 		SetExternalAddress(H323TransportAddress(localIpAddr, localPort), H323TransportAddress(localIpAddr, localPort + 1));
+@@ -2165,6 +2182,7 @@
+ 		cout << "\t\t-- remotePort: " << remotePort << endl;
+ 		cout << "\t\t-- ExternalIpAddress: " << localIpAddr << endl;
+ 		cout << "\t\t-- ExternalPort: " << localPort << endl;
++		cout << "\t\t-- PT: " << (int)payloadCode << endl;
+ 	}
+ 	/* Notify Asterisk of remote RTP information */
+ 	on_start_rtp_channel(connection.GetCallReference(), (const char *)remoteIpAddr.AsString(), remotePort,
+@@ -2183,6 +2201,7 @@
+ 		if (h323debug) {
+ 			cout << "		-- remoteIpAddress: " << remoteIpAddr << endl;
+ 			cout << "		-- remotePort: " << remotePort << endl;
++			cout << "               -- PT: " << (int)payloadCode << endl;
+ 		}
+ 		on_start_rtp_channel(connection.GetCallReference(), (const char *)remoteIpAddr.AsString(),
+ 				remotePort, (const char *)connection.GetCallToken(), (int)payloadCode);
+@@ -2340,7 +2359,9 @@
+ 	H323ListenerTCP *tcpListener;
+ 	tcpListener = new H323ListenerTCP(*endPoint, interfaceAddress, (WORD)listenPort);
+ 	if (!endPoint->StartListener(tcpListener)) {
+-		cout << "ERROR: Could not open H.323 listener port on " << ((H323ListenerTCP *) tcpListener)->GetListenerPort() << endl;
++		cout << "ERROR: Could not open H.323 listener "
++			<< ((H323ListenerTCP *) tcpListener)->GetTransportAddress() << endl;
++
+ 		delete tcpListener;
+ 		return 1;
+ 	}
+@@ -2395,7 +2416,15 @@
+ 
+ void h323_show_tokens(void)
+ {
+-	cout << "Current call tokens: " << setprecision(2) << endPoint->GetAllConnections() << endl;
++	PStringStream sstr;
++	PStringList tokens = endPoint->GetAllConnections();
++	cout << "Current call tokens: " << endl;
++	for(PINDEX i = 0; i < tokens.GetSize(); i++){
++		PStringStream str;
++		str << setprecision(2) << tokens[i] << '\n';
++		sstr += str;
++	}
++	cout << sstr << endl;
+ }
+ 
+ /** Establish Gatekeeper communiations, if so configured,
+diff -urN channels.orig/h323/ast_h323.h channels/h323/ast_h323.h
+--- channels.orig/h323/ast_h323.h	2007-10-19 19:51:28.000000000 +0300
++++ channels/h323/ast_h323.h	2008-05-19 21:05:55.000000000 +0300
+@@ -31,6 +31,10 @@
+ 
+ #define VERSION(a,b,c) ((a)*10000+(b)*100+(c))
+ 
++#if (VERSION(OPENH323_MAJOR, OPENH323_MINOR, OPENH323_BUILD) >= VERSION(1,13,4))
++#define NEED_RTP_QOS_PARAM 1
++#endif
++
+ class MyH323EndPoint : public H323EndPoint
+ {
+ 	PCLASSINFO(MyH323EndPoint, H323EndPoint);
+@@ -60,11 +64,18 @@
+ public:
+ 	MyH323Connection(MyH323EndPoint &, unsigned, unsigned);
+ 	~MyH323Connection();
++#ifdef NEED_RTP_QOS_PARAM
+ 	H323Channel * CreateRealTimeLogicalChannel(const H323Capability &,
+ 			H323Channel::Directions,
+ 			unsigned,
+ 			const H245_H2250LogicalChannelParameters *,
+ 			RTP_QOS *);
++#else
++	H323Channel * CreateRealTimeLogicalChannel(const H323Capability &,
++			H323Channel::Directions,
++			unsigned,
++			const H245_H2250LogicalChannelParameters *);
++#endif
+ 	H323Connection::AnswerCallResponse OnAnswerCall(const PString &,
+ 			const H323SignalPDU &,
+ 			H323SignalPDU &);
+@@ -136,7 +147,9 @@
+ 			MyH323Connection & connection,
+ 			const H323Capability & capability,
+ 			Directions direction,
+-			unsigned sessionID);
++			unsigned sessionID,
++			const PIPSocket::Address & ip,
++			WORD dataPort);
+ 
+ 	~MyH323_ExternalRTPChannel();
+ 
